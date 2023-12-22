@@ -54,13 +54,13 @@ def buttons(message):
                      '*Remove word* - _remove a word from your dictionary_.\n\n', parse_mode='Markdown', reply_markup=keyboard_call())
     buttons_limited = False
 
-@bot.message_handler(func=lambda message: ('Add new word' or 'Edit word' or 'Search word' or 'Remove word') in message.text)
+@bot.message_handler(func=lambda message: ('Add new word' in message.text or 'Edit word' in message.text or 'Search word' in message.text or 'Remove word' in message.text))
 def button_handler(message):
     global buttons_limited
     global is_word
     user_id = message.from_user.id
     keyboard = telebot.types.ReplyKeyboardRemove()
-    
+    print_user(message)
     if buttons_limited == False:
         print_user(message)
         if message.text == 'Add new word':
@@ -69,19 +69,31 @@ def button_handler(message):
             states[user_id] = 'add_new_word'
             
             bot.send_message(user_id, 'Send me your new word:', reply_markup=keyboard)
+        elif message.text == 'Search word':
+            buttons_limited = True
+            states[user_id] = 'search_word'
+            
+            bot.send_message(user_id, 'What word do you want to find?', reply_markup=keyboard)
+        elif message.text == 'Remove word':
+            buttons_limited = True
+            states[user_id] = 'remove_word'
+            
+            bot.send_message(user_id, 'Send me the word you want to delete.', reply_markup=keyboard)
 
 @bot.message_handler(func=lambda message: states.get(message.from_user.id) == 'add_new_word')
 def add_new_word(message):
     global is_word
     global current_word
+    global buttons_limited
     user_id = message.from_user.id
+    keyboard = keyboard_call()
     
     if is_word == True:
         print_user(message)
         
         with sqlite3.connect('db/dictionary.db') as file_db:
             cursor = file_db.cursor()
-            request = f"""INSERT INTO '{user_id}' (word) VALUES ('{message.text}')"""
+            request = f"""INSERT INTO '{user_id}' (word) VALUES ('{message.text}');"""
             cursor.execute(request)
         bot.send_message(user_id, 'Send me meaning for your word: ')
         current_word = message.text
@@ -93,8 +105,44 @@ def add_new_word(message):
             cursor = file_db.cursor()
             request = f"""UPDATE '{user_id}' SET meaning = '{message.text}'  WHERE word = '{current_word}';"""
             cursor.execute(request)
-        bot.send_message(user_id, 'Congratulations! Your word has been added to your dictionary.')
         current_word = None
+        buttons_limited = False
         states.pop(user_id)
+        bot.send_message(user_id, 'Congratulations! Your word has been added to your dictionary.', reply_markup=keyboard)
+
+@bot.message_handler(func=lambda message: states.get(message.from_user.id) == 'search_word')
+def search_word(message):
+    global buttons_limited
+    user_id = message.from_user.id
+    keyboard = keyboard_call()
+    
+    print_user(message)
+    try:
+        with sqlite3.connect('db/dictionary.db') as file_db:
+            cursor = file_db.cursor()
+            request = f"""SELECT word, meaning FROM '{user_id}' WHERE word = '{message.text}';"""
+            cursor.execute(request)
+        output = cursor.fetchone()
+        buttons_limited = False
+        states.pop(user_id)
+        
+        bot.send_message(user_id, f'*{output[0]}* - _{output[1]}_.', parse_mode='Markdown', reply_markup=keyboard)
+    except:
+        bot.send_message(user_id, 'Word os not found!', reply_markup=keyboard)
+
+@bot.message_handler(func=lambda message: states.get(message.from_user.id) == 'remove_word')
+def remove_word(message):
+    global buttons_limited
+    user_id = message.from_user.id
+    keyboard = keyboard_call()
+    
+    print_user(message)
+    with sqlite3.connect('db/dictionary.db') as file_db:
+        cursor = file_db.cursor()
+        request = f"""DELETE FROM '{user_id}' WHERE word = '{message.text}';"""
+        cursor.execute(request)
+    buttons_limited = False
+    states.pop(user_id)
+    bot.send_message(user_id, 'Congratulations! This word has been removed from your dictionary.', reply_markup=keyboard)
 
 bot.infinity_polling()
