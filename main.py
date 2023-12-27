@@ -10,6 +10,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 buttons_limited = True
 is_word = None
+is_old_word = None
 current_word = None
 
 states = {}
@@ -31,9 +32,9 @@ def print_user(message):
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     print_user(message)
-    bot.send_message(message.chat.id, "Hello. I'm a bot that can create your personal dictionary. Enter /newDictionary for to create new dictionary ")
+    bot.send_message(message.chat.id, "Hello. I'm a bot that can create your personal dictionary. Enter /dictionary for to create new dictionary ")
 
-@bot.message_handler(commands=['newDictionary'])
+@bot.message_handler(commands=['dictionary'])
 def buttons(message):
     print_user(message)
     user_id = message.from_user.id
@@ -47,7 +48,7 @@ def buttons(message):
             meaning TEXT
             );"""
         cursor.execute(request)
-    bot.send_message(user_id, 'Congratulation! Your new dictionary was create. \nChoose button: \n\n' +
+    bot.send_message(user_id, 'Choose button: \n\n' +
                      '*Add new word* - _add a new word to your dictionary_.\n\n' +
                      '*Edit word* - _edit a word in your dictionary_.\n\n' +
                      '*Search word* - _search a word in your dictionary_.\n\n' +
@@ -58,9 +59,10 @@ def buttons(message):
 def button_handler(message):
     global buttons_limited
     global is_word
+    global is_old_word
     user_id = message.from_user.id
     keyboard = telebot.types.ReplyKeyboardRemove()
-    print_user(message)
+
     if buttons_limited == False:
         print_user(message)
         if message.text == 'Add new word':
@@ -69,6 +71,12 @@ def button_handler(message):
             states[user_id] = 'add_new_word'
             
             bot.send_message(user_id, 'Send me your new word:', reply_markup=keyboard)
+        elif message.text == 'Edit word':
+            buttons_limited = True
+            is_old_word = True
+            states[user_id] = 'edit_word'
+            
+            bot.send_message(user_id, 'Send me the word you want to edit.', reply_markup=keyboard)
         elif message.text == 'Search word':
             buttons_limited = True
             states[user_id] = 'search_word'
@@ -93,11 +101,19 @@ def add_new_word(message):
         
         with sqlite3.connect('db/dictionary.db') as file_db:
             cursor = file_db.cursor()
-            request = f"""INSERT INTO '{user_id}' (word) VALUES ('{message.text}');"""
-            cursor.execute(request)
-        bot.send_message(user_id, 'Send me meaning for your word: ')
-        current_word = message.text
-        is_word = False
+            existing_word_query = f"SELECT * FROM '{user_id}' WHERE word = '{message.text}';"
+            cursor.execute(existing_word_query)
+            existing_word = cursor.fetchone()
+            
+            if existing_word:
+                bot.send_message(user_id, 'This word already in the dictionary!')
+            else:
+                insert_word_query = f"INSERT INTO '{user_id}' (word) VALUES ('{message.text}');"
+                cursor.execute(insert_word_query)
+                
+                bot.send_message(user_id, 'Send me meaning for your word: ')
+                current_word = message.text
+                is_word = False
     elif is_word == False and current_word is not None:
         print_user(message)
         
@@ -108,6 +124,55 @@ def add_new_word(message):
         current_word = None
         buttons_limited = False
         states.pop(user_id)
+        bot.send_message(user_id, 'Congratulations! Your word has been added to your dictionary.', reply_markup=keyboard)
+
+@bot.message_handler(func=lambda message: states.get(message.from_user.id) == 'edit_word')
+def edit_word(message):
+    global is_word
+    global is_old_word
+    global current_word
+    global buttons_limited
+    user_id = message.from_user.id
+    keyboard = keyboard_call()
+    
+    if is_old_word == True:
+        print_user(message)
+        
+        with sqlite3.connect('db/dictionary.db') as file_db:
+            cursor = file_db.cursor()
+            request = f"""SELECT word FROM '{user_id}' WHERE word = '{message.text}';"""
+            cursor.execute(request)
+        is_old_word = False
+        is_word = True
+        current_word = message.text
+        
+        bot.send_message(user_id, 'Send me the modified word: ')
+    elif is_word == True and current_word is not None:
+        print_user(message)
+        
+        with sqlite3.connect('db/dictionary.db') as file_db:
+            cursor = file_db.cursor()
+            request = f"""UPDATE '{user_id}' 
+                            SET word = '{message.text}'
+                            WHERE word = '{current_word}'"""
+            cursor.execute(request)
+        current_word = message.text
+        is_word = False
+        
+        bot.send_message(user_id, 'Send me meaning for your word: ')
+    elif is_word == False and current_word is not None:
+        print_user(message)
+        
+        with sqlite3.connect('db/dictionary.db') as file_db:
+            cursor = file_db.cursor()
+            request = f"""UPDATE '{user_id}' SET meaning = '{message.text}'  WHERE word = '{current_word}';"""
+            cursor.execute(request)
+        current_word = None
+        buttons_limited = False
+        is_word = None
+        is_old_word = None
+        states.pop(user_id)
+        
         bot.send_message(user_id, 'Congratulations! Your word has been added to your dictionary.', reply_markup=keyboard)
 
 @bot.message_handler(func=lambda message: states.get(message.from_user.id) == 'search_word')
@@ -128,7 +193,7 @@ def search_word(message):
         
         bot.send_message(user_id, f'*{output[0]}* - _{output[1]}_.', parse_mode='Markdown', reply_markup=keyboard)
     except:
-        bot.send_message(user_id, 'Word os not found!', reply_markup=keyboard)
+        bot.send_message(user_id, 'Word is not found!', reply_markup=keyboard)
 
 @bot.message_handler(func=lambda message: states.get(message.from_user.id) == 'remove_word')
 def remove_word(message):
@@ -139,10 +204,18 @@ def remove_word(message):
     print_user(message)
     with sqlite3.connect('db/dictionary.db') as file_db:
         cursor = file_db.cursor()
-        request = f"""DELETE FROM '{user_id}' WHERE word = '{message.text}';"""
-        cursor.execute(request)
-    buttons_limited = False
-    states.pop(user_id)
-    bot.send_message(user_id, 'Congratulations! This word has been removed from your dictionary.', reply_markup=keyboard)
+        existing_word_query = f"SELECT * FROM '{user_id}' WHERE word = '{message.text}';"
+        cursor.execute(existing_word_query)
+        existing_word = cursor.fetchone()
+        
+        if existing_word:
+            bot.send_message(user_id, 'This word already in the dictionary!')
+        else:
+            request = f"""DELETE FROM '{user_id}' WHERE word = '{message.text}';"""
+            cursor.execute(request)
+            
+            buttons_limited = False
+            states.pop(user_id)
+            bot.send_message(user_id, 'Congratulations! This word has been removed from your dictionary.', reply_markup=keyboard)
 
 bot.infinity_polling()
